@@ -656,17 +656,11 @@ chore: update dependencies
 
 ---
 
-## 📄 License
-
-This project is licensed under the **MIT License** - see [LICENSE](LICENSE) file for details.
-
----
-
 ## 📧 Contact & Support
 
 - **Issues:** [GitHub Issues](https://github.com/yourusername/ai-code-intelligence/issues)
 - **Discussions:** [GitHub Discussions](https://github.com/yourusername/ai-code-intelligence/discussions)
-- **Email:** support@example.com
+- **Email:** 
 - **Discord:** [Join our community](https://discord.gg/yourserver)
 
 ---
@@ -688,7 +682,6 @@ If this project helps you, please consider:
 - 🐛 Report bugs
 - 💡 Suggest features
 - 🤝 Contribute code
-- 📢 Share with friends
 
 ---
 
