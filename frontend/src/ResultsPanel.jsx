@@ -190,13 +190,113 @@ const styles = `
     align-items: center;
     gap: 8px;
   }
+
+  /* Markdown rendered output */
+  .md h2 { font-size: 14px; font-weight: 700; color: #e2e2e8; margin: 14px 0 6px; border-bottom: 1px solid #1e1e2e; padding-bottom: 4px; }
+  .md h3 { font-size: 13px; font-weight: 600; color: #a78bfa; margin: 10px 0 4px; }
+  .md p  { font-size: 13px; color: #9b9baf; margin: 4px 0 8px; line-height: 1.6; }
+  .md code { background: #0d0d0f; border: 1px solid #1e1e2e; border-radius: 4px; padding: 1px 6px; font-family: monospace; font-size: 12px; color: #a78bfa; }
+  .md pre  { background: #0d0d0f; border: 1px solid #1e1e2e; border-radius: 8px; padding: 10px 14px; overflow-x: auto; margin: 8px 0; }
+  .md pre code { background: none; border: none; padding: 0; color: #c9d1d9; font-size: 12.5px; line-height: 1.7; }
+  .md ul { padding-left: 18px; margin: 4px 0 8px; }
+  .md li { font-size: 13px; color: #9b9baf; margin: 2px 0; line-height: 1.5; }
+  .md table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 8px 0; }
+  .md th { background: #1e1e2e; color: #a78bfa; font-weight: 600; padding: 6px 10px; text-align: left; border: 1px solid #2a2a3e; }
+  .md td { padding: 5px 10px; border: 1px solid #1e1e2e; color: #9b9baf; }
+  .md tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .md strong { color: #e2e2e8; font-weight: 600; }
+
+  .output-card.full-width { grid-column: 1 / -1; }
 `
 
 const OUTPUT_META = {
-  explanation: { label: 'Explanation',  icon: '📖' },
-  diagram:     { label: 'Diagram',      icon: '🗺' },
-  api_docs:    { label: 'API Docs',     icon: '📄' },
-  refactor:    { label: 'Refactor',     icon: '🔧' },
+  explanation: { label: 'Explanation',  icon: '📖', wide: false },
+  diagram:     { label: 'Diagram',      icon: '🗺',  wide: false },
+  api_docs:    { label: 'API Docs',     icon: '📄', wide: false },
+  refactor:    { label: 'Refactor',     icon: '🔧', wide: false },
+  complexity:  { label: 'Complexity',   icon: '⏱',  wide: true  },
+  optimise:    { label: 'Optimise',     icon: '🚀', wide: true  },
+}
+
+// Minimal Markdown → HTML (handles headings, bold, inline code, fenced code, tables, lists)
+function renderMarkdown(md) {
+  if (!md) return ''
+  const lines = md.split('\n')
+  let html = ''
+  let inCode = false
+  let inTable = false
+  let inList = false
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i]
+
+    // fenced code blocks
+    if (line.startsWith('```')) {
+      if (inList) { html += '</ul>'; inList = false }
+      if (inTable) { html += '</tbody></table>'; inTable = false }
+      if (inCode) { html += '</code></pre>'; inCode = false }
+      else { html += '<pre><code>'; inCode = true }
+      continue
+    }
+    if (inCode) { html += escHtml(line) + '\n'; continue }
+
+    // table rows
+    if (line.includes('|')) {
+      if (inList) { html += '</ul>'; inList = false }
+      const cells = line.split('|').filter((_, i, a) => i > 0 && i < a.length - 1)
+      if (line.replace(/[\s|:-]/g, '') === '') {
+        // separator row — skip
+        continue
+      }
+      if (!inTable) {
+        html += '<table><thead><tr>'
+        cells.forEach(c => { html += `<th>${inline(c.trim())}</th>` })
+        html += '</tr></thead><tbody>'
+        inTable = true
+      } else {
+        html += '<tr>'
+        cells.forEach(c => { html += `<td>${inline(c.trim())}</td>` })
+        html += '</tr>'
+      }
+      continue
+    }
+    if (inTable) { html += '</tbody></table>'; inTable = false }
+
+    // headings
+    const h2 = line.match(/^##\s+(.+)/)
+    const h3 = line.match(/^###\s+(.+)/)
+    if (h3) { if (inList) { html += '</ul>'; inList = false } html += `<h3>${inline(h3[1])}</h3>`; continue }
+    if (h2) { if (inList) { html += '</ul>'; inList = false } html += `<h2>${inline(h2[1])}</h2>`; continue }
+
+    // list items
+    const li = line.match(/^\s*[-*]\s+(.+)/)
+    if (li) {
+      if (!inList) { html += '<ul>'; inList = true }
+      html += `<li>${inline(li[1])}</li>`
+      continue
+    }
+    if (inList && line.trim() === '') { html += '</ul>'; inList = false }
+
+    // paragraph
+    const text = line.trim()
+    if (text) html += `<p>${inline(text)}</p>`
+  }
+
+  if (inCode)  html += '</code></pre>'
+  if (inTable) html += '</tbody></table>'
+  if (inList)  html += '</ul>'
+  return html
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+}
+
+function inline(s) {
+  return escHtml(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
 }
 
 function CopyButton({ text }) {
@@ -236,7 +336,9 @@ function OutputCard({ name, status, content }) {
         <div className="output-body">
           {status === 'error'
             ? <div className="output-error"><span>⚠</span>{content || 'An error occurred.'}</div>
-            : <pre>{content}</pre>
+            : name === 'diagram'
+              ? <pre>{content}</pre>
+              : <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />
           }
         </div>
       )}
@@ -310,9 +412,14 @@ export default function ResultsPanel({ result }) {
 
       {outputs && (
         <div className="outputs-grid">
-          {Object.entries(outputs).map(([key, { status: s, content }]) => (
-            <OutputCard key={key} name={key} status={s} content={content} />
-          ))}
+          {Object.entries(outputs).map(([key, { status: s, content }]) => {
+            const meta = OUTPUT_META[key] || {}
+            return (
+              <div key={key} style={meta.wide ? { gridColumn: '1 / -1' } : {}}>
+                <OutputCard name={key} status={s} content={content} />
+              </div>
+            )
+          })}
         </div>
       )}
     </>
