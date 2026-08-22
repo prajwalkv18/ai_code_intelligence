@@ -127,7 +127,7 @@ export default function App() {
         {loading && (
           <>
             <div className="loading-bar" />
-            <p className="loading-text">Analysing your code with IBM Granite…</p>
+            <p className="loading-text">Analysing your code with Qwen 2.5 Coder…</p>
           </>
         )}
 
