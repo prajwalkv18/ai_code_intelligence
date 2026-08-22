@@ -8,7 +8,7 @@ import asyncio
 from typing import Optional
 
 from ast_parser import format_ast_summary
-from llm_client import get_api_docs, get_diagram, get_explanation, get_refactor
+from llm_client import get_api_docs, get_complexity, get_diagram, get_explanation, get_optimise, get_refactor
 
 
 async def analyze(
@@ -17,7 +17,7 @@ async def analyze(
     ast_summary: Optional[dict],
 ) -> dict:
     """
-    Runs explanation, diagram, api_docs, and refactor concurrently.
+    Runs explanation, diagram, api_docs, refactor, and complexity concurrently.
 
     Returns the 'outputs' sub-dict and the top-level 'status':
         {
@@ -27,6 +27,8 @@ async def analyze(
                 "diagram":     {"status": "done"|"error", "content": "..."},
                 "api_docs":    {"status": "done"|"error", "content": "..."},
                 "refactor":    {"status": "done"|"error", "content": "..."},
+                "complexity":  {"status": "done"|"error", "content": "..."},
+                "optimise":    {"status": "done"|"error", "content": "..."},
             }
         }
     """
@@ -37,11 +39,15 @@ async def analyze(
         (dia_status, dia_content),
         (doc_status, doc_content),
         (ref_status, ref_content),
+        (cmp_status, cmp_content),
+        (opt_status, opt_content),
     ) = await asyncio.gather(
         get_explanation(code, language, ast_block),
         get_diagram(code, language, ast_block),
         get_api_docs(code, language, ast_block),
         get_refactor(code, language, ast_block),
+        get_complexity(code, language, ast_block),
+        get_optimise(code, language, ast_block),
     )
 
     outputs = {
@@ -49,6 +55,8 @@ async def analyze(
         "diagram":     {"status": dia_status, "content": dia_content},
         "api_docs":    {"status": doc_status, "content": doc_content},
         "refactor":    {"status": ref_status, "content": ref_content},
+        "complexity":  {"status": cmp_status, "content": cmp_content},
+        "optimise":    {"status": opt_status, "content": opt_content},
     }
 
     any_error = any(v["status"] == "error" for v in outputs.values())

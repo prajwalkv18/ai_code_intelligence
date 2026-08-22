@@ -5,6 +5,7 @@ Extracts and normalises code from paste, single-file upload, or zip archive.
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 from collections import Counter
 from typing import Optional
@@ -39,6 +40,53 @@ def _detect_language(ext_counts: Counter) -> str:
     return "unknown"
 
 
+def _detect_language_from_code(code: str) -> str:
+    """Heuristic language detection from pasted source code.
+
+    Each entry is (language, [patterns]).  A language is chosen when ANY of
+    its patterns matches.  Entries are ordered so that more-specific signatures
+    come before ambiguous ones (e.g. Java before Python, Go before Python).
+    """
+    signatures: list[tuple[str, list[str]]] = [
+        # ── strongly-typed / distinctive keywords first ──────────────────────
+        # Java: must match java-specific imports or JVM idioms
+        ("java",       [r"^\s*import\s+java\.", r"\bpublic\s+static\s+void\s+main\b",
+                        r"\bSystem\.out\.", r"\bSystem\.in\b"]),
+        # C#: namespace or using System are unambiguous
+        ("csharp",     [r"\busing\s+System\b", r"\bnamespace\s+\w+",
+                        r"\bConsole\.(Write|Read)\b"]),
+        ("cpp",        [r"#include\s*<[a-z_]+>", r"\bstd::", r"\bcout\b"]),
+        ("c",          [r"#include\s*<[a-z_]+\.h>", r"\bprintf\s*\(",
+                        r"\bmalloc\s*\(", r"int\s+main\s*\(\s*(void|int)"]),
+        ("go",         [r"^package\s+\w+", r"^\s*import\s+\(",
+                        r"\bfunc\s+\w+\s*\("]),
+        ("typescript", [r":\s*(string|number|boolean|any|void)\b",
+                        r"\binterface\s+\w+", r"^\s*import\s+.+\s+from\s+['\"]"]),
+        ("javascript", [r"\bconsole\.log\(", r"=>\s*{",
+                        r"\brequire\s*\(", r"^\s*import\s+.+\s+from\s+['\"]"]),
+        # Ruby: `end` keyword is unambiguous; def alone is not
+        ("ruby",       [r"\bputs\b", r"^\s*def\s+\w+.*\n[\s\S]*?\bend\b"]),
+        # Python: colon-terminated def/class, or from…import
+        ("python",     [r"^\s*def\s+\w+\s*\(.*\):", r"^\s*class\s+\w+.*:",
+                        r"^\s*from\s+\w+\s+import\s+", r"print\(",
+                        r"^\s*import\s+[a-z_]+\s*$"]),
+        # ── markup / data formats ─────────────────────────────────────────────
+        ("html",       [r"<!DOCTYPE\s+html", r"<html[\s>]", r"<body[\s>]"]),
+        ("css",        [r"@media\b", r"@import\b",
+                        r"[a-z-]+\s*:\s*[^;{]+;"]),
+        ("json",       [r"^\s*\{[\s\S]*\"[^\"]+\"\s*:", r"^\s*\["]),
+        ("yaml",       [r"^---", r"^\w[\w ]*:\s+\S"]),
+        ("markdown",   [r"^#{1,6} ", r"^\*\*\S", r"^\s*- \S"]),
+    ]
+
+    for language, patterns in signatures:
+        for pattern in patterns:
+            if re.search(pattern, code, re.MULTILINE):
+                return language
+
+    return "unknown"
+
+
 def _suffix(filename: str) -> str:
     dot = filename.rfind(".")
     return filename[dot:].lower() if dot != -1 else ""
@@ -59,7 +107,7 @@ async def extract_code(
     if input_type == "paste":
         if not code:
             raise HTTPException(status_code=400, detail="No code provided for paste input.")
-        return code, ["pasted_code"], [], "unknown"
+        return code, ["pasted_code"], [], _detect_language_from_code(code)
 
     if input_type in ("file", "zip"):
         if file is None:
