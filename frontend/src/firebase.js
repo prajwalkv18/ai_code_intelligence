@@ -5,13 +5,13 @@ import { getFirestore, collection, addDoc, getDocs, query, where, orderBy } from
 // TODO: Replace this with your actual Firebase project config.
 // You can find this in the Firebase Console -> Project Settings -> General -> Your apps (Web app)
 const firebaseConfig = {
-  apiKey: "AIzaSyCtsgfW3_JkFiEW-teGyAwVYBU3b45ltyM",
-  authDomain: "ai-code-intelligence-2026.firebaseapp.com",
-  projectId: "ai-code-intelligence-2026",
-  storageBucket: "ai-code-intelligence-2026.firebasestorage.app",
-  messagingSenderId: "931387003390",
-  appId: "1:931387003390:web:6cc9c3629c05843b2d30af",
-  measurementId: "G-WNSS1M5L0N"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "ai-code-intelligence-2026.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "ai-code-intelligence-2026",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "ai-code-intelligence-2026.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "931387003390",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:931387003390:web:6cc9c3629c05843b2d30af",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-WNSS1M5L0N"
 };
 
 // Initialize Firebase
