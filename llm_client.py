@@ -1,96 +1,87 @@
 """
 llm_client.py
-Async wrappers around the HuggingFace inference API for each analysis task.
+Async wrappers using the ultra-fast Groq API (OpenAI-compatible) for each analysis task and chat.
 """
 from __future__ import annotations
 
 import os
 import sys
-import httpx
+import asyncio
 from typing import Optional
 
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL_ID   = "Qwen/Qwen2.5-Coder-7B-Instruct"
-ENDPOINT   = "https://router.huggingface.co/v1/chat/completions"
-MAX_TOKENS = 1024
-
-_token: Optional[str] = None
-
-
-def _get_token() -> str:
-    global _token
-    if _token is None:
-        _token = os.getenv("HF_API_TOKEN", "")
-        if not _token:
-            print(
-                "\n[ERROR] HF_API_TOKEN is not set in your .env file.\n"
-                "  Add:  HF_API_TOKEN=hf_...\n"
-                "  Get a token at: https://huggingface.co/settings/tokens\n",
-                file=sys.stderr,
-            )
-    return _token
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+TIMEOUT_S = 30
+MAX_RETRIES = 2
 
 
-async def _call(system_prompt: str, code: str) -> tuple[str, str]:
-    """Low-level call; returns (status, content)."""
-    token = _get_token()
-    if not token:
+async def _call(system_prompt: str, code: str, max_tokens: int = 2048) -> tuple[str, str]:
+    """Calls Groq API with system prompt and code prompt; returns (status, content)."""
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
         return "error", (
-            "HF_API_TOKEN is not set. Add it to your .env file and restart the server."
+            "GROQ_API_KEY is not set in `.env`. "
+            "Please get a free API key at https://console.groq.com/keys and add `GROQ_API_KEY=gsk_...` to your `.env` file."
         )
 
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+
     payload = {
-        "model": MODEL_ID,
+        "model": GROQ_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": code},
+            {"role": "user", "content": code},
         ],
-        "max_tokens": MAX_TOKENS,
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(ENDPOINT, json=payload, headers=headers)
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
+                response = await client.post(GROQ_API_URL, headers=headers, json=payload)
+                
+                if response.status_code == 401:
+                    return "error", "Invalid GROQ_API_KEY. Please check your key at https://console.groq.com/keys"
+                
+                if response.status_code == 429:
+                    if attempt < MAX_RETRIES:
+                        await asyncio.sleep(2 * (attempt + 1))
+                        continue
+                    return "error", "Groq rate limit reached. Please wait a few seconds and try again."
 
-        if response.status_code == 402:
-            return "error", (
-                "HuggingFace credits exhausted. "
-                "Purchase credits at https://huggingface.co/settings/billing "
-                "or switch to a new token."
-            )
-        if response.status_code == 403:
-            return "error", (
-                "HuggingFace token lacks 'Inference API' permission. "
-                "Go to https://huggingface.co/settings/tokens → edit token → "
-                "enable 'Make calls to the serverless Inference API'."
-            )
-        if response.status_code == 401:
-            return "error", (
-                "HuggingFace token is invalid or expired. "
-                "Generate a new token at https://huggingface.co/settings/tokens."
-            )
-        if not response.is_success:
-            return "error", f"HuggingFace API error {response.status_code}: {response.text[:300]}"
+                response.raise_for_status()
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                return "done", content.strip()
 
-        data = response.json()
-        content = data["choices"][0]["message"]["content"] or ""
-        return "done", content.strip()
+        except httpx.TimeoutException:
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(1)
+                continue
+            return "error", f"Groq API timed out after {TIMEOUT_S}s."
+        except Exception as exc:
+            err_str = str(exc)
+            print(f"[llm_client] Groq Error: {err_str}", file=sys.stderr)
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(1)
+                continue
+            return "error", f"Groq API error: {err_str}"
 
-    except httpx.ConnectError as exc:
-        return "error", f"Cannot reach HuggingFace API: {exc}"
-    except Exception as exc:
-        return "error", str(exc)
+    return "error", "Failed to connect to Groq API. Please try again."
 
 
 # ---------------------------------------------------------------------------
-# Four public analysis functions
+# Core analysis functions
 # ---------------------------------------------------------------------------
 
 async def get_explanation(code: str, language: str, ast_block: str) -> tuple[str, str]:
@@ -174,3 +165,87 @@ async def get_complexity(code: str, language: str, ast_block: str) -> tuple[str,
         f"{ast_block}"
     ).strip()
     return await _call(system_prompt, code)
+
+
+async def get_unit_tests(code: str, language: str, ast_block: str) -> tuple[str, str]:
+    """Generate a comprehensive unit test suite for the given code."""
+    framework_map = {
+        "python":     "pytest",
+        "javascript": "Jest",
+        "typescript": "Jest",
+        "java":       "JUnit 5",
+        "go":         "Go testing package (testing.T)",
+        "ruby":       "RSpec",
+        "csharp":     "xUnit",
+        "cpp":        "Google Test (gtest)",
+        "c":          "Unity test framework",
+    }
+    framework = framework_map.get(language, "an appropriate unit testing framework")
+    system_prompt = (
+        f"You are an expert software testing engineer. Given the following {language} code, "
+        f"generate a comprehensive unit test suite using {framework}. "
+        "Cover: happy-path tests, edge cases, error/exception cases, and boundary conditions. "
+        "Use descriptive test names that explain what is being tested and the expected outcome. "
+        "Include all necessary imports and setup code so the tests are immediately runnable. "
+        "Output ONLY a valid Markdown document with exactly these two sections:\n\n"
+        "## Unit Tests\n"
+        "A brief bullet list of what scenarios are covered.\n\n"
+        "## Test Suite\n"
+        f"A single fenced code block containing the complete, runnable {language} test file. "
+        "Do not include any text outside these two sections. "
+        f"{ast_block}"
+    ).strip()
+    return await _call(system_prompt, code)
+
+
+# ---------------------------------------------------------------------------
+# Chat function
+# ---------------------------------------------------------------------------
+
+async def chat_with_code(
+    code: str,
+    language: str,
+    history: list[dict],
+    user_message: str,
+) -> tuple[str, str]:
+    """
+    Contextual chat about the analysed code using multi-turn conversation.
+    history: list of {"role": "user"|"model"|"assistant", "content": str} dicts
+    """
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        return "error", "GROQ_API_KEY is not set."
+
+    system_prompt = (
+        f"You are an expert code assistant. The user has submitted the following {language} "
+        "code for analysis. Answer questions about it concisely and helpfully. "
+        "When providing code examples, use markdown fenced code blocks. "
+        "Be direct — avoid unnecessary preamble.\n\n"
+        f"```{language}\n{code[:8000]}\n```"
+    )
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in history:
+        role = "assistant" if msg.get("role") in ("model", "assistant") else "user"
+        messages.append({"role": role, "content": msg.get("content", "")})
+    messages.append({"role": "user", "content": user_message})
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.4,
+        "max_tokens": 2048,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
+            response = await client.post(GROQ_API_URL, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return "done", data["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        return "error", f"Chat error: {exc}"

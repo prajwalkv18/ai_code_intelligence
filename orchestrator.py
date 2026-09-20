@@ -1,6 +1,6 @@
 """
 orchestrator.py
-Runs all four LLM analysis tasks concurrently and assembles the response dict.
+Runs six LLM analysis tasks concurrently and assembles the response dict.
 """
 from __future__ import annotations
 
@@ -8,7 +8,22 @@ import asyncio
 from typing import Optional
 
 from ast_parser import format_ast_summary
-from llm_client import get_api_docs, get_complexity, get_diagram, get_explanation, get_optimise, get_refactor
+from llm_client import (
+    get_api_docs,
+    get_complexity,
+    get_diagram,
+    get_explanation,
+    get_optimise,
+    get_refactor,
+)
+
+# Limit concurrent Groq API calls to avoid 429 rate-limit errors on the free tier.
+# 3 concurrent calls is a safe default; each finishes in ~1-2s so total wall time is ~4-6s.
+_groq_sem = asyncio.Semaphore(3)
+
+async def _throttled(coro):
+    async with _groq_sem:
+        return await coro
 
 
 async def analyze(
@@ -17,9 +32,9 @@ async def analyze(
     ast_summary: Optional[dict],
 ) -> dict:
     """
-    Runs explanation, diagram, api_docs, refactor, and complexity concurrently.
+    Runs six analysis tasks concurrently via asyncio.gather.
 
-    Returns the 'outputs' sub-dict and the top-level 'status':
+    Returns:
         {
             "status": "success" | "partial",
             "outputs": {
@@ -42,12 +57,12 @@ async def analyze(
         (cmp_status, cmp_content),
         (opt_status, opt_content),
     ) = await asyncio.gather(
-        get_explanation(code, language, ast_block),
-        get_diagram(code, language, ast_block),
-        get_api_docs(code, language, ast_block),
-        get_refactor(code, language, ast_block),
-        get_complexity(code, language, ast_block),
-        get_optimise(code, language, ast_block),
+        _throttled(get_explanation(code, language, ast_block)),
+        _throttled(get_diagram(code, language, ast_block)),
+        _throttled(get_api_docs(code, language, ast_block)),
+        _throttled(get_refactor(code, language, ast_block)),
+        _throttled(get_complexity(code, language, ast_block)),
+        _throttled(get_optimise(code, language, ast_block)),
     )
 
     outputs = {
@@ -63,3 +78,36 @@ async def analyze(
     status    = "partial" if any_error else "success"
 
     return {"status": status, "outputs": outputs}
+
+
+async def analyze_stream(
+    code:        str,
+    language:    str,
+    ast_summary: Optional[dict],
+):
+    """
+    Generator that yields (panel_name, status, content) tuples one by one
+    as each concurrent LLM task completes. Used by the SSE endpoint.
+    """
+    ast_block = format_ast_summary(ast_summary)
+
+    tasks = {
+        "explanation": asyncio.create_task(_throttled(get_explanation(code, language, ast_block))),
+        "diagram":     asyncio.create_task(_throttled(get_diagram(code, language, ast_block))),
+        "api_docs":    asyncio.create_task(_throttled(get_api_docs(code, language, ast_block))),
+        "refactor":    asyncio.create_task(_throttled(get_refactor(code, language, ast_block))),
+        "complexity":  asyncio.create_task(_throttled(get_complexity(code, language, ast_block))),
+        "optimise":    asyncio.create_task(_throttled(get_optimise(code, language, ast_block))),
+    }
+
+    pending = dict(tasks)
+    while pending:
+        done, _ = await asyncio.wait(
+            list(pending.values()), return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in done:
+            # find the name for this task
+            name = next(k for k, v in pending.items() if v is task)
+            status, content = task.result()
+            yield name, status, content
+            del pending[name]

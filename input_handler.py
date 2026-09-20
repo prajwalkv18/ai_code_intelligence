@@ -1,15 +1,18 @@
 """
 input_handler.py
-Extracts and normalises code from paste, single-file upload, or zip archive.
+Extracts and normalises code from paste, single-file upload, zip archive,
+or a GitHub repository URL.
 """
 from __future__ import annotations
 
 import io
+import os
 import re
 import zipfile
 from collections import Counter
 from typing import Optional
 
+import httpx
 from fastapi import HTTPException, UploadFile
 
 # ---------------------------------------------------------------------------
@@ -30,6 +33,11 @@ EXT_TO_LANGUAGE: dict[str, str] = {
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024          # 10 MB raw upload guard
 TOKEN_CAP        = 80_000                     # approximate token cap
 CHAR_CAP         = TOKEN_CAP * 4              # ~320 000 chars
+
+# GitHub API limits
+GITHUB_MAX_FILES = 200                        # max files to fetch from a repo
+GITHUB_API_BASE  = "https://api.github.com"
+GITHUB_RAW_BASE  = "https://raw.githubusercontent.com"
 
 
 def _detect_language(ext_counts: Counter) -> str:
@@ -109,6 +117,12 @@ async def extract_code(
             raise HTTPException(status_code=400, detail="No code provided for paste input.")
         return code, ["pasted_code"], [], _detect_language_from_code(code)
 
+    if input_type == "github":
+        # code field is re-used to carry the GitHub URL
+        if not code:
+            raise HTTPException(status_code=400, detail="No GitHub URL provided.")
+        return await _handle_github_url(code.strip())
+
     if input_type in ("file", "zip"):
         if file is None:
             raise HTTPException(status_code=400, detail="No file uploaded.")
@@ -124,6 +138,144 @@ async def extract_code(
         return _handle_zip(raw)
 
     raise HTTPException(status_code=400, detail=f"Unknown input_type: {input_type!r}")
+
+
+# ---------------------------------------------------------------------------
+# GitHub URL helper
+# ---------------------------------------------------------------------------
+async def _handle_github_url(url: str) -> tuple[str, list[str], list[str], str]:
+    """
+    Fetch source files from a public (or token-authenticated) GitHub repository.
+
+    Accepted URL formats:
+      - https://github.com/owner/repo
+      - https://github.com/owner/repo/tree/branch
+      - https://github.com/owner/repo/tree/branch/subdir
+    """
+    # --- Parse URL ---
+    pattern = r"github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)(?:/(.+))?)?"
+    m = re.search(pattern, url)
+    if not m:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid GitHub URL. Expected: https://github.com/owner/repo"
+        )
+    owner, repo = m.group(1), m.group(2).rstrip("/")
+    branch  = m.group(3) or "HEAD"
+    subdir  = (m.group(4) or "").rstrip("/")
+
+    # Build headers with optional auth token
+    headers: dict[str, str] = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    gh_token = os.getenv("GITHUB_TOKEN", "")
+    if gh_token:
+        headers["Authorization"] = f"Bearer {gh_token}"
+
+    # --- Fetch repo file tree ---
+    tree_url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            tree_resp = await client.get(tree_url, headers=headers)
+    except httpx.ConnectError as exc:
+        raise HTTPException(status_code=502, detail=f"Cannot reach GitHub API: {exc}")
+
+    if tree_resp.status_code == 404:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Repository '{owner}/{repo}' not found or is private. "
+                   "Set GITHUB_TOKEN in .env for private repos."
+        )
+    if tree_resp.status_code == 403:
+        raise HTTPException(
+            status_code=403,
+            detail="GitHub API rate limit exceeded. Add a GITHUB_TOKEN to .env for higher limits."
+        )
+    if not tree_resp.is_success:
+        raise HTTPException(
+            status_code=tree_resp.status_code,
+            detail=f"GitHub API error: {tree_resp.text[:200]}"
+        )
+
+    tree_data = tree_resp.json()
+    if tree_data.get("truncated"):
+        # Very large repo; we'll work with whatever we got
+        pass
+
+    all_blobs = [
+        item for item in tree_data.get("tree", [])
+        if item["type"] == "blob"
+    ]
+
+    # Filter by subdir prefix if provided
+    if subdir:
+        all_blobs = [b for b in all_blobs if b["path"].startswith(subdir + "/") or b["path"] == subdir]
+
+    # Filter by allowed extensions
+    allowed_blobs  = [b for b in all_blobs if _suffix(b["path"]) in ALLOWED_EXTENSIONS]
+    skipped_ext    = [b["path"] for b in all_blobs if _suffix(b["path"]) not in ALLOWED_EXTENSIONS]
+
+    # Cap number of files
+    candidate_blobs = allowed_blobs[:GITHUB_MAX_FILES]
+    over_limit      = [b["path"] for b in allowed_blobs[GITHUB_MAX_FILES:]]
+
+    if not candidate_blobs:
+        raise HTTPException(
+            status_code=400,
+            detail="No supported source files found in the repository."
+        )
+
+    # --- Fetch file contents ---
+    parts: list[str]          = []
+    files_analyzed: list[str] = []
+    files_skipped: list[str]  = skipped_ext + over_limit
+    ext_counts: Counter       = Counter()
+    running_chars             = 0
+    budget_exhausted          = False
+    skipped_token: list[str]  = []
+
+    raw_base = f"{GITHUB_RAW_BASE}/{owner}/{repo}/{branch}"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for blob in candidate_blobs:
+            if budget_exhausted:
+                skipped_token.append(blob["path"])
+                continue
+
+            raw_url = f"{raw_base}/{blob['path']}"
+            try:
+                resp = await client.get(raw_url, headers={"Authorization": headers.get("Authorization", "")} if gh_token else {})
+                if not resp.is_success:
+                    skipped_ext.append(blob["path"])
+                    continue
+                content = resp.text
+            except Exception:
+                skipped_ext.append(blob["path"])
+                continue
+
+            chunk = f"# --- FILE: {blob['path']} ---\n{content}\n"
+            if running_chars + len(chunk) > CHAR_CAP:
+                skipped_token.append(blob["path"])
+                budget_exhausted = True
+                continue
+
+            parts.append(chunk)
+            files_analyzed.append(blob["path"])
+            ext_counts[_suffix(blob["path"])] += 1
+            running_chars += len(chunk)
+
+    files_skipped = files_skipped + skipped_token
+
+    if not parts:
+        raise HTTPException(status_code=400, detail="Could not fetch any readable source files from the repository.")
+
+    concatenated = "\n".join(parts)
+    if skipped_token:
+        concatenated += f"\n# [TRUNCATED: {len(skipped_token)} files skipped due to token limit]"
+
+    language = _detect_language(ext_counts)
+    return concatenated, files_analyzed, files_skipped, language
 
 
 # ---------------------------------------------------------------------------

@@ -31,12 +31,13 @@ const styles = `
   .status-chip.success { background: rgba(34,197,94,0.12); color: #4ade80; border: 1px solid rgba(34,197,94,0.2); }
   .status-chip.partial { background: rgba(234,179,8,0.12);  color: #facc15; border: 1px solid rgba(234,179,8,0.2); }
   .status-chip.error   { background: rgba(239,68,68,0.12);  color: #f87171; border: 1px solid rgba(239,68,68,0.2); }
+  .status-chip.loading { background: rgba(99,102,241,0.12); color: #a78bfa; border: 1px solid rgba(99,102,241,0.2); }
 
   .meta-bar {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-    margin-bottom: 24px;
+    margin-bottom: 16px;
   }
 
   .meta-pill {
@@ -50,6 +51,44 @@ const styles = `
 
   .meta-pill span { color: #a78bfa; font-weight: 600; }
 
+  /* ── Export bar ─────────────────────────────────────── */
+  .export-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  .export-bar-label {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #4a4a60;
+    margin-right: 4px;
+  }
+
+  .export-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border: 1px solid #2a2a3e;
+    border-radius: 8px;
+    background: #13131a;
+    color: #9b9baf;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+
+  .export-btn:hover { background: #1e1e2e; color: #e2e2e8; border-color: #6366f1; }
+  .export-btn.success { color: #4ade80; border-color: rgba(34,197,94,0.3); }
+
+  /* ── AST card ────────────────────────────────────────── */
   .ast-card {
     background: #13131a;
     border: 1px solid #1e1e2e;
@@ -97,6 +136,7 @@ const styles = `
     font-family: monospace;
   }
 
+  /* ── Outputs grid ────────────────────────────────────── */
   .outputs-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -112,6 +152,12 @@ const styles = `
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    transition: border-color 0.3s;
+  }
+
+  .output-card.streaming {
+    border-color: rgba(99,102,241,0.4);
+    box-shadow: 0 0 0 1px rgba(99,102,241,0.15);
   }
 
   .output-card-header {
@@ -147,12 +193,28 @@ const styles = `
     border-radius: 4px;
   }
 
-  .output-badge.done  { background: rgba(34,197,94,0.12); color: #4ade80; }
-  .output-badge.error { background: rgba(239,68,68,0.12);  color: #f87171; }
+  .output-badge.done    { background: rgba(34,197,94,0.12); color: #4ade80; }
+  .output-badge.error   { background: rgba(239,68,68,0.12);  color: #f87171; }
+  .output-badge.loading { background: rgba(99,102,241,0.12); color: #a78bfa; }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .loading-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: #a78bfa;
+    border-radius: 50%;
+    animation: pulse-dot 1.2s ease-in-out infinite;
+    margin-left: 2px;
+  }
 
   .output-actions { display: flex; gap: 6px; align-items: center; }
 
-  .copy-btn {
+  .copy-btn, .dl-btn {
     background: #1e1e2e;
     border: 1px solid #2a2a3e;
     border-radius: 6px;
@@ -163,14 +225,14 @@ const styles = `
     transition: all 0.15s;
   }
 
-  .copy-btn:hover { background: #2a2a3e; color: #e2e2e8; }
+  .copy-btn:hover, .dl-btn:hover { background: #2a2a3e; color: #e2e2e8; }
   .copy-btn.copied { color: #4ade80; border-color: rgba(34,197,94,0.3); }
 
   .output-body {
     padding: 14px 16px;
     flex: 1;
     overflow: auto;
-    max-height: 360px;
+    max-height: 380px;
   }
 
   .output-body pre {
@@ -189,6 +251,26 @@ const styles = `
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .output-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 0;
+  }
+
+  .skeleton-line {
+    height: 12px;
+    background: linear-gradient(90deg, #1e1e2e 25%, #2a2a3e 50%, #1e1e2e 75%);
+    background-size: 200% 100%;
+    border-radius: 6px;
+    animation: shimmer 1.5s linear infinite;
+  }
+
+  @keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
   }
 
   /* Markdown rendered output */
@@ -218,36 +300,28 @@ const OUTPUT_META = {
   optimise:    { label: 'Optimise',     icon: '🚀', wide: true  },
 }
 
-// Minimal Markdown → HTML (handles headings, bold, inline code, fenced code, tables, lists)
+// Minimal Markdown → HTML renderer
 function renderMarkdown(md) {
   if (!md) return ''
   const lines = md.split('\n')
   let html = ''
-  let inCode = false
-  let inTable = false
-  let inList = false
+  let inCode = false, inTable = false, inList = false
 
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i]
-
-    // fenced code blocks
     if (line.startsWith('```')) {
-      if (inList) { html += '</ul>'; inList = false }
+      if (inList)  { html += '</ul>'; inList = false }
       if (inTable) { html += '</tbody></table>'; inTable = false }
-      if (inCode) { html += '</code></pre>'; inCode = false }
-      else { html += '<pre><code>'; inCode = true }
+      if (inCode)  { html += '</code></pre>'; inCode = false }
+      else         { html += '<pre><code>'; inCode = true }
       continue
     }
     if (inCode) { html += escHtml(line) + '\n'; continue }
 
-    // table rows
     if (line.includes('|')) {
       if (inList) { html += '</ul>'; inList = false }
       const cells = line.split('|').filter((_, i, a) => i > 0 && i < a.length - 1)
-      if (line.replace(/[\s|:-]/g, '') === '') {
-        // separator row — skip
-        continue
-      }
+      if (line.replace(/[\s|:-]/g, '') === '') continue
       if (!inTable) {
         html += '<table><thead><tr>'
         cells.forEach(c => { html += `<th>${inline(c.trim())}</th>` })
@@ -262,13 +336,11 @@ function renderMarkdown(md) {
     }
     if (inTable) { html += '</tbody></table>'; inTable = false }
 
-    // headings
     const h2 = line.match(/^##\s+(.+)/)
     const h3 = line.match(/^###\s+(.+)/)
     if (h3) { if (inList) { html += '</ul>'; inList = false } html += `<h3>${inline(h3[1])}</h3>`; continue }
     if (h2) { if (inList) { html += '</ul>'; inList = false } html += `<h2>${inline(h2[1])}</h2>`; continue }
 
-    // list items
     const li = line.match(/^\s*[-*]\s+(.+)/)
     if (li) {
       if (!inList) { html += '<ul>'; inList = true }
@@ -277,7 +349,6 @@ function renderMarkdown(md) {
     }
     if (inList && line.trim() === '') { html += '</ul>'; inList = false }
 
-    // paragraph
     const text = line.trim()
     if (text) html += `<p>${inline(text)}</p>`
   }
@@ -315,31 +386,66 @@ function CopyButton({ text }) {
   )
 }
 
-function OutputCard({ name, status, content }) {
+function DownloadButton({ filename, content, e: eventRef }) {
+  function download(e) {
+    e.stopPropagation()
+    const blob = new Blob([content], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+  return (
+    <button className="dl-btn" onClick={download} title={`Download ${filename}`}>⬇</button>
+  )
+}
+
+function OutputCard({ name, status, content, streaming }) {
   const [open, setOpen] = useState(true)
   const meta = OUTPUT_META[name] || { label: name, icon: '◆' }
+  const isLoading = streaming && status === undefined
+  const badge = isLoading ? 'loading' : (status || 'loading')
 
   return (
-    <div className="output-card">
+    <div className={`output-card ${isLoading ? 'streaming' : ''}`}>
       <div className="output-card-header" onClick={() => setOpen(o => !o)}>
         <div className="output-card-title">
           <span className="output-icon">{meta.icon}</span>
           {meta.label}
-          <span className={`output-badge ${status}`}>{status}</span>
+          <span className={`output-badge ${badge}`}>
+            {isLoading ? (<>waiting<span className="loading-dot" /></>) : badge}
+          </span>
         </div>
         <div className="output-actions">
-          {status === 'done' && content && <CopyButton text={content} />}
+          {status === 'done' && content && (
+            <>
+              <CopyButton text={content} />
+              <DownloadButton
+                filename={`${name}.md`}
+                content={content}
+              />
+            </>
+          )}
           <span style={{ color: '#6b6b80', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
       </div>
       {open && (
         <div className="output-body">
-          {status === 'error'
-            ? <div className="output-error"><span>⚠</span>{content || 'An error occurred.'}</div>
-            : name === 'diagram'
-              ? <pre>{content}</pre>
-              : <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />
-          }
+          {isLoading ? (
+            <div className="output-skeleton">
+              {[90, 75, 85, 60, 70].map((w, i) => (
+                <div key={i} className="skeleton-line" style={{ width: `${w}%` }} />
+              ))}
+            </div>
+          ) : status === 'error' ? (
+            <div className="output-error"><span>⚠</span>{content || 'An error occurred.'}</div>
+          ) : name === 'diagram' ? (
+            <pre>{content}</pre>
+          ) : (
+            <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />
+          )}
         </div>
       )}
     </div>
@@ -384,10 +490,84 @@ function AstCard({ ast_summary }) {
   )
 }
 
-export default function ResultsPanel({ result }) {
-  if (!result) return null
+function ExportBar({ outputs }) {
+  const [status, setStatus] = useState('')
 
-  const { status, language_detected, files_analyzed, files_skipped, ast_summary, outputs } = result
+  function downloadAll() {
+    // Build a single bundled markdown file
+    const sections = Object.entries(outputs)
+      .filter(([, v]) => v.status === 'done' && v.content)
+      .map(([key, v]) => {
+        const meta = OUTPUT_META[key] || { label: key, icon: '' }
+        return `# ${meta.icon} ${meta.label}\n\n${v.content}`
+      })
+      .join('\n\n---\n\n')
+
+    const blob = new Blob([sections], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'ai_code_analysis.md'
+    a.click()
+    URL.revokeObjectURL(url)
+    setStatus('saved')
+    setTimeout(() => setStatus(''), 2500)
+  }
+
+  function copyAll() {
+    const all = Object.entries(outputs)
+      .filter(([, v]) => v.status === 'done' && v.content)
+      .map(([key, v]) => {
+        const meta = OUTPUT_META[key] || { label: key }
+        return `=== ${meta.label.toUpperCase()} ===\n\n${v.content}`
+      })
+      .join('\n\n')
+    navigator.clipboard.writeText(all).then(() => {
+      setStatus('copied')
+      setTimeout(() => setStatus(''), 2500)
+    })
+  }
+
+  return (
+    <div className="export-bar">
+      <span className="export-bar-label">Export</span>
+      <button
+        className={`export-btn ${status === 'saved' ? 'success' : ''}`}
+        onClick={downloadAll}
+      >
+        📥 {status === 'saved' ? 'Downloaded!' : 'Download Markdown'}
+      </button>
+      <button
+        className={`export-btn ${status === 'copied' ? 'success' : ''}`}
+        onClick={copyAll}
+      >
+        📋 {status === 'copied' ? 'Copied!' : 'Copy All'}
+      </button>
+    </div>
+  )
+}
+
+export default function ResultsPanel({ result, streamPanels }) {
+  if (!result && (!streamPanels || Object.keys(streamPanels).length === 0)) return null
+
+  const meta = result || {}
+  const { status, language_detected, files_analyzed, files_skipped, ast_summary } = meta
+
+  // Merge: streaming panels override/supplement result.outputs
+  const outputs = {
+    ...Object.fromEntries(
+      Object.keys(OUTPUT_META).map(k => [k, undefined])
+    ),
+    ...(result?.outputs || {}),
+    ...(streamPanels || {}),
+  }
+
+  const panelEntries = Object.entries(outputs)
+  const allDone = panelEntries.every(([, v]) => v?.status === 'done' || v?.status === 'error')
+  const anyDone = panelEntries.some(([, v]) => v?.status === 'done')
+  const isStreaming = streamPanels !== undefined && status === 'loading'
+
+  const chipStatus = status || (isStreaming ? 'loading' : undefined)
 
   return (
     <>
@@ -395,14 +575,21 @@ export default function ResultsPanel({ result }) {
 
       <div className="results-header">
         <div className="results-title">Analysis Results</div>
-        <div className={`status-chip ${status}`}>
-          {status === 'success' ? '✓' : status === 'partial' ? '⚡' : '✗'} {status}
-        </div>
+        {chipStatus && (
+          <div className={`status-chip ${chipStatus}`}>
+            {chipStatus === 'success' ? '✓'
+             : chipStatus === 'partial' ? '⚡'
+             : chipStatus === 'loading' ? '⏳'
+             : '✗'} {chipStatus === 'loading' ? 'streaming…' : chipStatus}
+          </div>
+        )}
       </div>
 
       <div className="meta-bar">
-        <div className="meta-pill">Language: <span>{language_detected ?? '—'}</span></div>
-        <div className="meta-pill">Files: <span>{files_analyzed?.join(', ') || '—'}</span></div>
+        {language_detected && <div className="meta-pill">Language: <span>{language_detected}</span></div>}
+        {files_analyzed?.length > 0 && (
+          <div className="meta-pill">Files: <span>{files_analyzed.join(', ')}</span></div>
+        )}
         {files_skipped?.length > 0 && (
           <div className="meta-pill">Skipped: <span>{files_skipped.length} file{files_skipped.length > 1 ? 's' : ''}</span></div>
         )}
@@ -410,18 +597,27 @@ export default function ResultsPanel({ result }) {
 
       {ast_summary && <AstCard ast_summary={ast_summary} />}
 
-      {outputs && (
-        <div className="outputs-grid">
-          {Object.entries(outputs).map(([key, { status: s, content }]) => {
-            const meta = OUTPUT_META[key] || {}
-            return (
-              <div key={key} style={meta.wide ? { gridColumn: '1 / -1' } : {}}>
-                <OutputCard name={key} status={s} content={content} />
-              </div>
-            )
-          })}
-        </div>
+      {anyDone && allDone && result && (
+        <ExportBar outputs={outputs} />
       )}
+
+      <div className="outputs-grid">
+        {panelEntries.map(([key, panel]) => {
+          const panelMeta = OUTPUT_META[key] || {}
+          // A panel is still waiting if we're streaming AND it hasn't arrived yet
+          const isPanelWaiting = isStreaming && panel?.status === undefined
+          return (
+            <div key={key} style={panelMeta.wide ? { gridColumn: '1 / -1' } : {}}>
+              <OutputCard
+                name={key}
+                status={isPanelWaiting ? undefined : panel?.status}
+                content={panel?.content}
+                streaming={isPanelWaiting}
+              />
+            </div>
+          )
+        })}
+      </div>
     </>
   )
 }
