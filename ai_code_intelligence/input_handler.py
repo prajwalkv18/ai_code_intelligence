@@ -6,6 +6,7 @@ or a GitHub repository URL.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import re
 import zipfile
@@ -15,19 +16,27 @@ from typing import Optional
 import httpx
 from fastapi import HTTPException, UploadFile
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 ALLOWED_EXTENSIONS = {
-    ".py", ".js", ".ts", ".java", ".go", ".rb", ".cs",
-    ".cpp", ".c", ".h", ".html", ".css", ".json", ".yaml", ".md",
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+    ".java", ".go", ".rb", ".cs", ".cpp", ".c", ".h", ".hpp",
+    ".rs", ".kt", ".swift", ".sh", ".bash", ".sql",
+    ".html", ".css", ".json", ".yaml", ".yml", ".md",
 }
 
 EXT_TO_LANGUAGE: dict[str, str] = {
-    ".py": "python", ".js": "javascript", ".ts": "typescript",
+    ".py": "python", ".js": "javascript", ".jsx": "javascript",
+    ".ts": "typescript", ".tsx": "typescript", ".mjs": "javascript", ".cjs": "javascript",
     ".java": "java", ".go": "go", ".rb": "ruby", ".cs": "csharp",
-    ".cpp": "cpp", ".c": "c", ".h": "c", ".html": "html",
-    ".css": "css", ".json": "json", ".yaml": "yaml", ".md": "markdown",
+    ".cpp": "cpp", ".c": "c", ".h": "c", ".hpp": "cpp",
+    ".rs": "rust", ".kt": "kotlin", ".swift": "swift",
+    ".sh": "bash", ".bash": "bash", ".sql": "sql",
+    ".html": "html", ".css": "css", ".json": "json",
+    ".yaml": "yaml", ".yml": "yaml", ".md": "markdown",
 }
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024          # 10 MB raw upload guard
@@ -153,24 +162,35 @@ async def _handle_github_url(url: str) -> tuple[str, list[str], list[str], str]:
       - https://github.com/owner/repo/tree/branch/subdir
     """
     # --- Parse URL ---
-    pattern = r"github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)(?:/(.+))?)?"
+    url = url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No GitHub URL provided.")
+
+    if url.startswith("git@github.com:"):
+        url = "https://github.com/" + url[len("git@github.com:"):]
+
+    pattern = r"github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/(?:tree|blob)/([^/]+)(?:/(.+))?)?/?$"
     m = re.search(pattern, url)
     if not m:
         raise HTTPException(
             status_code=400,
-            detail="Invalid GitHub URL. Expected: https://github.com/owner/repo"
+            detail="Invalid GitHub URL. Expected format: https://github.com/owner/repo or https://github.com/owner/repo/tree/branch"
         )
-    owner, repo = m.group(1), m.group(2).rstrip("/")
-    branch  = m.group(3) or "HEAD"
-    subdir  = (m.group(4) or "").rstrip("/")
+    owner = m.group(1)
+    repo = m.group(2).removesuffix(".git").rstrip("/")
+    branch = m.group(3) or "HEAD"
+    subdir = (m.group(4) or "").rstrip("/")
 
     # Build headers with optional auth token
     headers: dict[str, str] = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "AI-Code-Intelligence/2.0",
     }
-    gh_token = os.getenv("GITHUB_TOKEN", "")
-    if gh_token:
+    gh_token = os.getenv("GITHUB_TOKEN", "").strip()
+    # Ignore unset or default placeholder tokens
+    has_valid_token = bool(gh_token and not gh_token.startswith("your_") and gh_token != "optional")
+    if has_valid_token:
         headers["Authorization"] = f"Bearer {gh_token}"
 
     # --- Fetch repo file tree ---
@@ -181,21 +201,26 @@ async def _handle_github_url(url: str) -> tuple[str, list[str], list[str], str]:
     except httpx.ConnectError as exc:
         raise HTTPException(status_code=502, detail=f"Cannot reach GitHub API: {exc}")
 
+    if tree_resp.status_code == 401:
+        raise HTTPException(
+            status_code=401,
+            detail="GitHub authentication failed (401 Bad Credentials). Please check your GITHUB_TOKEN in .env or leave it blank for public repos."
+        )
     if tree_resp.status_code == 404:
         raise HTTPException(
             status_code=404,
-            detail=f"Repository '{owner}/{repo}' not found or is private. "
-                   "Set GITHUB_TOKEN in .env for private repos."
+            detail=f"Repository '{owner}/{repo}' (branch '{branch}') not found or is private. "
+                   "Set a valid GITHUB_TOKEN in .env for private repos."
         )
     if tree_resp.status_code == 403:
         raise HTTPException(
             status_code=403,
-            detail="GitHub API rate limit exceeded. Add a GITHUB_TOKEN to .env for higher limits."
+            detail="GitHub API rate limit exceeded. Add a GITHUB_TOKEN to .env for higher limits (5,000 req/hr)."
         )
     if not tree_resp.is_success:
         raise HTTPException(
             status_code=tree_resp.status_code,
-            detail=f"GitHub API error: {tree_resp.text[:200]}"
+            detail=f"GitHub API error ({tree_resp.status_code}): {tree_resp.text[:200]}"
         )
 
     tree_data = tree_resp.json()
@@ -244,13 +269,20 @@ async def _handle_github_url(url: str) -> tuple[str, list[str], list[str], str]:
                 continue
 
             raw_url = f"{raw_base}/{blob['path']}"
+            raw_headers = {"Authorization": headers["Authorization"]} if has_valid_token else {"User-Agent": "AI-Code-Intelligence/2.0"}
             try:
-                resp = await client.get(raw_url, headers={"Authorization": headers.get("Authorization", "")} if gh_token else {})
+                resp = await client.get(raw_url, headers=raw_headers)
+                if not resp.is_success and has_valid_token:
+                    # Fallback to GitHub API raw endpoint for private repos if raw URL fails
+                    api_blob_url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{blob['path']}?ref={branch}"
+                    resp = await client.get(api_blob_url, headers={**headers, "Accept": "application/vnd.github.v3.raw"})
                 if not resp.is_success:
+                    logger.warning(f"Could not fetch {blob['path']} (HTTP {resp.status_code})")
                     skipped_ext.append(blob["path"])
                     continue
                 content = resp.text
-            except Exception:
+            except Exception as exc:
+                logger.warning(f"Exception fetching {blob['path']}: {exc}")
                 skipped_ext.append(blob["path"])
                 continue
 

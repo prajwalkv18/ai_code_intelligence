@@ -19,10 +19,10 @@ from fastapi.responses import JSONResponse
 # pyrefly: ignore [missing-import]
 from sse_starlette.sse import EventSourceResponse
 
-from ast_parser import parse_python_ast
+from ast_parser import parse_python_ast, build_codebase_graph
 from input_handler import extract_code
 from orchestrator import analyze, analyze_stream
-from llm_client import chat_with_code
+from llm_client import chat_with_code, generate_new_code
 
 load_dotenv()
 
@@ -60,12 +60,15 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
             "files_skipped": [],
             "ast_summary": None,
             "outputs": {
-                "explanation": {"status": "error", "content": ""},
-                "diagram":     {"status": "error", "content": ""},
-                "api_docs":    {"status": "error", "content": ""},
-                "refactor":    {"status": "error", "content": ""},
-                "complexity":  {"status": "error", "content": ""},
-                "optimise":    {"status": "error", "content": ""},
+                "explanation":  {"status": "error", "content": ""},
+                "diagram":      {"status": "error", "content": ""},
+                "api_docs":     {"status": "error", "content": ""},
+                "refactor":     {"status": "error", "content": ""},
+                "complexity":   {"status": "error", "content": ""},
+                "optimise":     {"status": "error", "content": ""},
+                "compliance":   {"status": "error", "content": ""},
+                "security":     {"status": "error", "content": ""},
+                "next_actions": {"status": "error", "content": ""},
             },
             "error": exc.detail,
         },
@@ -83,38 +86,49 @@ def _build_response(
     ast_summary: Any,
     extracted_code: str,
 ) -> dict:
+    topology_graph = build_codebase_graph(extracted_code, files_analyzed, effective_language)
     return {
         "status":            result["status"],
         "language_detected": effective_language,
         "files_analyzed":    files_analyzed,
         "files_skipped":     files_skipped,
         "ast_summary":       ast_summary,
+        "topology_graph":    topology_graph,
         "outputs":           result["outputs"],
         "code_context":      extracted_code[:8000],   # sent back for chat context
+        "full_code":         extracted_code,          # full source for IntelliSense viewer
         "error":             None,
     }
-
 
 # ---------------------------------------------------------------------------
 # POST /api/analyze  (blocking — waits for all 7 panels)
 # ---------------------------------------------------------------------------
 @app.post("/api/analyze")
 async def api_analyze(
-    input_type: str              = Form(...),
-    code:       Optional[str]    = Form(None),
-    language:   Optional[str]    = Form(None),
-    file:       Optional[UploadFile] = File(None),
+    input_type:      str              = Form(...),
+    code:            Optional[str]    = Form(None),
+    language:        Optional[str]    = Form(None),
+    spec_sheet:      Optional[str]    = Form(None),
+    selected_panels: Optional[str]    = Form(None),   # JSON array e.g. '["explanation","security"]'
+    file:            Optional[UploadFile] = File(None),
 ) -> JSONResponse:
     """
     Accepts multipart/form-data with:
-      - input_type : "paste" | "file" | "zip" | "github"
-      - code       : raw source text (paste/github modes)
-      - language   : optional language hint
-      - file       : uploaded file/zip (file/zip mode)
-
-    Returns the standard analysis JSON shape with all 7 output panels.
+      - input_type      : "paste" | "file" | "zip" | "github"
+      - code            : raw source text (paste/github modes)
+      - language        : optional language hint
+      - selected_panels : JSON-encoded list of panel names to run (omit = run all)
+      - file            : uploaded file/zip (file/zip mode)
     """
-    # 1. Extract / normalise code
+    # 1. Parse selected panels
+    panels: Optional[list[str]] = None
+    if selected_panels:
+        try:
+            panels = json.loads(selected_panels)
+        except Exception:
+            panels = None
+
+    # 2. Extract / normalise code
     try:
         extracted_code, files_analyzed, files_skipped, detected_language = (
             await extract_code(input_type, code, file)
@@ -126,18 +140,18 @@ async def api_analyze(
 
     effective_language = language or detected_language
 
-    # 2. AST parse (Python only)
+    # 3. AST parse (Python only)
     ast_summary: Any = None
     if effective_language == "python":
         ast_summary = parse_python_ast(extracted_code)
 
-    # 3. Run all 7 LLM analysis tasks concurrently
+    # 4. Run selected LLM analysis tasks
     try:
-        result = await analyze(extracted_code, effective_language, ast_summary)
+        result = await analyze(extracted_code, effective_language, ast_summary, spec_sheet, panels)
     except Exception as exc:
         return _error_response(str(exc))
 
-    # 4. Assemble response
+    # 5. Assemble response
     return JSONResponse(
         content=_build_response(
             result, effective_language, files_analyzed,
@@ -151,35 +165,38 @@ async def api_analyze(
 # ---------------------------------------------------------------------------
 @app.post("/api/analyze/stream")
 async def api_analyze_stream(
-    input_type: str              = Form(...),
-    code:       Optional[str]    = Form(None),
-    language:   Optional[str]    = Form(None),
-    file:       Optional[UploadFile] = File(None),
+    input_type:      str              = Form(...),
+    code:            Optional[str]    = Form(None),
+    language:        Optional[str]    = Form(None),
+    spec_sheet:      Optional[str]    = Form(None),
+    selected_panels: Optional[str]    = Form(None),   # JSON array e.g. '["explanation","security"]'
+    file:            Optional[UploadFile] = File(None),
 ) -> EventSourceResponse:
     """
     Same as /api/analyze but uses Server-Sent Events.
     Each panel is sent as a separate SSE event as soon as its LLM call finishes.
-
-    Event format:
-      event: <panel_name>
-      data: {"status": "done"|"error", "content": "..."}
-
-    Final event:
-      event: done
-      data: {"language_detected": "...", "files_analyzed": [...], ...}
     """
-    # 1. Extract code (runs synchronously before streaming starts)
+    # Parse selected panels
+    panels: Optional[list[str]] = None
+    if selected_panels:
+        try:
+            panels = json.loads(selected_panels)
+        except Exception:
+            panels = None
+
     try:
         extracted_code, files_analyzed, files_skipped, detected_language = (
             await extract_code(input_type, code, file)
         )
     except HTTPException as exc:
+        err_msg = str(exc.detail)
         async def _err_gen():
-            yield {"event": "error", "data": json.dumps({"error": exc.detail})}
+            yield {"event": "error", "data": json.dumps({"error": err_msg})}
         return EventSourceResponse(_err_gen())
     except Exception as exc:
+        err_msg = str(exc)
         async def _err_gen():
-            yield {"event": "error", "data": json.dumps({"error": str(exc)})}
+            yield {"event": "error", "data": json.dumps({"error": err_msg})}
         return EventSourceResponse(_err_gen())
 
     effective_language = language or detected_language
@@ -188,8 +205,10 @@ async def api_analyze_stream(
     if effective_language == "python":
         ast_summary = parse_python_ast(extracted_code)
 
+    topology_graph = build_codebase_graph(extracted_code, files_analyzed, effective_language)
+
     async def event_generator() -> AsyncGenerator[dict, None]:
-        # Send metadata first so the frontend can render the header immediately
+        # Send metadata first so the frontend can render the header & graph immediately
         yield {
             "event": "meta",
             "data": json.dumps({
@@ -197,13 +216,15 @@ async def api_analyze_stream(
                 "files_analyzed":    files_analyzed,
                 "files_skipped":     files_skipped,
                 "ast_summary":       ast_summary,
+                "topology_graph":    topology_graph,
                 "code_context":      extracted_code[:8000],
+                "full_code":         extracted_code,
             }),
         }
 
         outputs = {}
         async for panel_name, status, content in analyze_stream(
-            extracted_code, effective_language, ast_summary
+            extracted_code, effective_language, ast_summary, spec_sheet, panels
         ):
             outputs[panel_name] = {"status": status, "content": content}
             yield {
@@ -256,20 +277,55 @@ async def api_chat(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/generate — AI code & integration generator bot
+# ---------------------------------------------------------------------------
+@app.post("/api/generate")
+async def api_generate(request: Request) -> JSONResponse:
+    """
+    Request body (JSON):
+      {
+        "code":     "<source code>",
+        "language": "python",
+        "history":  [{"role": "user"|"assistant", "content": "..."}],
+        "prompt":   "Create a REST endpoint to connect to Stripe API"
+      }
+
+    Response:
+      {"status": "done"|"error", "reply": "..."}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON.")
+
+    code     = body.get("code", "")
+    language = body.get("language", "unknown")
+    history  = body.get("history", [])
+    prompt   = body.get("prompt", "").strip()
+
+    if not prompt:
+        raise HTTPException(status_code=400, detail="'prompt' field is required.")
+
+    status, reply = await generate_new_code(code, language, history, prompt)
+    return JSONResponse(content={"status": status, "reply": reply})
+
+
+# ---------------------------------------------------------------------------
 # GET /health
 # ---------------------------------------------------------------------------
 @app.get("/health")
 async def health() -> JSONResponse:
     import os
-    has_gemini = bool(os.getenv("GOOGLE_API_KEY"))
+    from llm_client import GROQ_MODEL
+    has_groq = bool(os.getenv("GROQ_API_KEY", "").strip())
     return JSONResponse(content={
         "status": "ok",
         "version": "2.0.0",
-        "llm": "Google Gemini (gemini-1.5-flash)",
-        "google_api_key_set": has_gemini,
+        "llm": f"Groq ({GROQ_MODEL})",
+        "groq_api_key_set": has_groq,
         "features": [
             "explanation", "diagram", "api_docs", "refactor",
-            "complexity", "optimise", "unit_tests",
+            "complexity", "optimise", "compliance", "security", "next_actions",
             "github_import", "chat", "sse_streaming", "export",
         ],
     })
@@ -288,12 +344,15 @@ def _error_response(message: str) -> JSONResponse:
             "files_skipped":     [],
             "ast_summary":       None,
             "outputs": {
-                "explanation": {"status": "error", "content": ""},
-                "diagram":     {"status": "error", "content": ""},
-                "api_docs":    {"status": "error", "content": ""},
-                "refactor":    {"status": "error", "content": ""},
-                "complexity":  {"status": "error", "content": ""},
-                "optimise":    {"status": "error", "content": ""},
+                "explanation":  {"status": "error", "content": ""},
+                "diagram":      {"status": "error", "content": ""},
+                "api_docs":     {"status": "error", "content": ""},
+                "refactor":     {"status": "error", "content": ""},
+                "complexity":   {"status": "error", "content": ""},
+                "optimise":     {"status": "error", "content": ""},
+                "compliance":   {"status": "error", "content": ""},
+                "security":     {"status": "error", "content": ""},
+                "next_actions": {"status": "error", "content": ""},
             },
             "error": message,
         },

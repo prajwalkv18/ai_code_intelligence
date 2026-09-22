@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 TIMEOUT_S = 30
 MAX_RETRIES = 2
@@ -198,6 +198,59 @@ async def get_unit_tests(code: str, language: str, ast_block: str) -> tuple[str,
     return await _call(system_prompt, code)
 
 
+async def get_compliance(code: str, language: str, ast_block: str, spec_sheet: Optional[str]) -> tuple[str, str]:
+    if not spec_sheet:
+        return "done", "No spec sheet or requirements provided for compliance check."
+        
+    system_prompt = (
+        f"You are a strict compliance and code review auditor. Given the following {language} code and a "
+        "User Spec Sheet / Requirements document, analyze the code against the spec sheet. "
+        "Produce a Markdown report with exactly these sections:\n\n"
+        "## Compliance Status\n"
+        "A brief summary (e.g., 'Fully Compliant', 'Partially Compliant', 'Non-Compliant').\n\n"
+        "## What is Complete\n"
+        "A bulleted list of requirements from the spec sheet that are successfully implemented.\n\n"
+        "## What is Non-Compliant / Missing\n"
+        "A bulleted list of requirements that are missing, incomplete, or violate the spec sheet.\n\n"
+        f"User Spec Sheet:\n{spec_sheet}\n\n"
+        f"Output ONLY the Markdown report. {ast_block}"
+    ).strip()
+    return await _call(system_prompt, code)
+
+
+async def get_security(code: str, language: str, ast_block: str) -> tuple[str, str]:
+    system_prompt = (
+        f"You are an expert security auditor. Given the following {language} code, perform a simple "
+        "security vulnerability test. Identify common flaws such as injection vulnerabilities, hardcoded "
+        "secrets, improper error handling, XSS, CSRF, etc.\n\n"
+        "Produce a Markdown report with exactly these sections:\n\n"
+        "## Security Overview\n"
+        "A brief summary of the code's security posture.\n\n"
+        "## Vulnerabilities Found\n"
+        "A bulleted list of potential vulnerabilities. If none are found, state 'No obvious vulnerabilities detected.'\n\n"
+        "## Recommendations\n"
+        "Actionable steps to fix the identified issues.\n\n"
+        f"Output ONLY the Markdown report. {ast_block}"
+    ).strip()
+    return await _call(system_prompt, code)
+
+
+async def get_next_actions(code: str, language: str, ast_block: str, spec_sheet: Optional[str]) -> tuple[str, str]:
+    system_prompt = (
+        f"You are an agile technical project manager. Given the following {language} code "
+        f"{'and the provided Spec Sheet ' if spec_sheet else ''}suggest the immediate next actions "
+        "for the development team.\n\n"
+        "Produce a Markdown report with exactly these sections:\n\n"
+        "## Immediate Next Steps\n"
+        "A bulleted checklist (using `[ ]`) of high-priority tasks to complete next.\n\n"
+        "## Technical Debt & Maintenance\n"
+        "A bulleted checklist of cleanups or minor refactors that should be addressed soon.\n\n"
+        f"{'Spec Sheet Context: ' + spec_sheet + str(chr(10)) if spec_sheet else ''}"
+        f"Output ONLY the Markdown report. {ast_block}"
+    ).strip()
+    return await _call(system_prompt, code)
+
+
 # ---------------------------------------------------------------------------
 # Chat function
 # ---------------------------------------------------------------------------
@@ -217,10 +270,11 @@ async def chat_with_code(
         return "error", "GROQ_API_KEY is not set."
 
     system_prompt = (
-        f"You are an expert code assistant. The user has submitted the following {language} "
-        "code for analysis. Answer questions about it concisely and helpfully. "
-        "When providing code examples, use markdown fenced code blocks. "
-        "Be direct — avoid unnecessary preamble.\n\n"
+        f"You are an expert code assistant and developer. The user has submitted the following {language} codebase.\n"
+        "RULES FOR RESPONSE:\n"
+        "1. Whenever asked to write, refactor, implement, create, or fix code, ALWAYS PROVIDE THE FULL RUNNABLE CODE IN FENCED MARKDOWN CODE BLOCKS FIRST.\n"
+        "2. Do NOT just explain or summarize in text without including the actual code implementation.\n"
+        "3. Keep text preambles minimal — put code front and center.\n\n"
         f"```{language}\n{code[:8000]}\n```"
     )
 
@@ -237,7 +291,7 @@ async def chat_with_code(
     payload = {
         "model": GROQ_MODEL,
         "messages": messages,
-        "temperature": 0.4,
+        "temperature": 0.3,
         "max_tokens": 2048,
     }
 
@@ -249,3 +303,56 @@ async def chat_with_code(
             return "done", data["choices"][0]["message"]["content"].strip()
     except Exception as exc:
         return "error", f"Chat error: {exc}"
+
+
+async def generate_new_code(
+    code: str,
+    language: str,
+    history: list[dict],
+    user_prompt: str,
+) -> tuple[str, str]:
+    """
+    Generate new code, integrations, microservices, or feature modules based on the analyzed codebase.
+    """
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        return "error", "GROQ_API_KEY is not set."
+
+    system_prompt = (
+        f"You are a Senior Principal Software Architect and Lead Code Generator.\n"
+        f"Your ONLY job is to write complete, production-ready, runnable NEW CODE and integration files based on the user's request and the provided {language} codebase.\n\n"
+        "CRITICAL RULES:\n"
+        "1. YOU MUST START YOUR RESPONSE IMMEDIATELY WITH THE COMPLETE RUNNABLE CODE IN A FENCED CODE BLOCK (e.g. ```" + (language or "python") + ").\n"
+        "2. DO NOT START WITH A TEXT OVERVIEW, GENERIC EXPLANATION, OR SUMMARY TABLE.\n"
+        "3. Write full, syntactically valid, production-grade code with error handling, type annotations, imports, and docstrings.\n"
+        "4. AFTER the code block, you may provide 2-3 short bullet points explaining where to save the file and how to integrate it.\n\n"
+        f"--- EXISTING CODEBASE CONTEXT ({language}) ---\n"
+        f"```{language}\n{code[:8000]}\n```"
+    )
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in history:
+        role = "assistant" if msg.get("role") in ("model", "assistant") else "user"
+        messages.append({"role": role, "content": msg.get("content", "")})
+    messages.append({"role": "user", "content": user_prompt})
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 3072,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
+            response = await client.post(GROQ_API_URL, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return "done", data["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        return "error", f"Code generation error: {exc}"
+

@@ -189,12 +189,14 @@ async def api_analyze_stream(
             await extract_code(input_type, code, file)
         )
     except HTTPException as exc:
+        err_msg = str(exc.detail)
         async def _err_gen():
-            yield {"event": "error", "data": json.dumps({"error": exc.detail})}
+            yield {"event": "error", "data": json.dumps({"error": err_msg})}
         return EventSourceResponse(_err_gen())
     except Exception as exc:
+        err_msg = str(exc)
         async def _err_gen():
-            yield {"event": "error", "data": json.dumps({"error": str(exc)})}
+            yield {"event": "error", "data": json.dumps({"error": err_msg})}
         return EventSourceResponse(_err_gen())
 
     effective_language = language or detected_language
@@ -314,12 +316,13 @@ async def api_generate(request: Request) -> JSONResponse:
 @app.get("/health")
 async def health() -> JSONResponse:
     import os
-    has_gemini = bool(os.getenv("GOOGLE_API_KEY"))
+    from llm_client import GROQ_MODEL
+    has_groq = bool(os.getenv("GROQ_API_KEY", "").strip())
     return JSONResponse(content={
         "status": "ok",
         "version": "2.0.0",
-        "llm": "Google Gemini (gemini-1.5-flash)",
-        "google_api_key_set": has_gemini,
+        "llm": f"Groq ({GROQ_MODEL})",
+        "groq_api_key_set": has_groq,
         "features": [
             "explanation", "diagram", "api_docs", "refactor",
             "complexity", "optimise", "compliance", "security", "next_actions",
