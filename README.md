@@ -1,690 +1,241 @@
-# 🚀 AI Code Intelligence Platform
+<p align="center">
+  <h1 align="center">AI Code Intelligence Platform</h1>
+  <p align="center">
+    Drop in any codebase — get back architecture graphs, security audits, complexity analysis, and two AI assistants that actually understand your code.
+  </p>
+</p>
 
-**Automated Code Documentation, Explanation, and Optimization using IBM Granite, Watson & Bob**
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/FastAPI-2.0-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React">
+  <img src="https://img.shields.io/badge/Vite-8-646CFF?style=flat-square&logo=vite&logoColor=white" alt="Vite">
+  <img src="https://img.shields.io/badge/Groq-Llama_3.3_70B-F55036?style=flat-square" alt="Groq">
+  <img src="https://img.shields.io/badge/Firebase-Auth_%26_Firestore-FFCA28?style=flat-square&logo=firebase&logoColor=black" alt="Firebase">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
+</p>
 
-Transform raw code into professional documentation, visual diagrams, and optimized solutions in seconds.
+---
+
+## 🎯 What It Does
+
+**AI Code Intelligence** is a full-stack developer tool that accepts source code via paste, file upload, ZIP archive, or GitHub URL — then runs up to 9 concurrent LLM-powered analyses (explanation, architecture diagrams, API docs, refactoring, Big-O complexity, algorithm optimisation, spec compliance, security scan, and next actions). 
+
+Results stream to the browser in real time via SSE. An interactive topology graph visualises file/class/function relationships extracted from the AST, and two floating AI chatbots let you ask questions about the code or generate new features that match the existing codebase's style.
 
 ---
 
 ## 📋 Table of Contents
 
-- [Overview](#overview)
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Quick Start](#quick-start)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [API Documentation](#api-documentation)
-- [Project Structure](#project-structure)
-- [Development](#development)
-- [Deployment](#deployment)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
+- [What It Does](#-what-it-does)
+- [Key Features](#-key-features)
+- [Architecture](#-architecture)
+- [Tech Stack](#-tech-stack)
+- [Getting Started](#-getting-started)
+- [Project Structure](#-project-structure)
+- [API Reference](#-api-reference)
+- [Configuration](#-configuration)
+- [Roadmap](#-roadmap)
+- [Contributing](#-contributing)
+- [License](#-license)
+- [Author](#-author)
 
 ---
 
-## 🎯 Overview
+## ✨ Key Features
 
-**AI Code Intelligence** is a web platform that leverages IBM's AI services to automatically:
+### Code Ingestion
+- **Paste** — auto-detects language from 14+ signatures (Python, JS, TS, Java, Go, Ruby, C#, C/C++, HTML, CSS, JSON, YAML, Markdown)
+- **File upload** — any single source file with whitelisted extension
+- **ZIP archive** — auto-extracts, filters by extension, respects a ~320K character budget
+- **GitHub URL** — fetches up to 200 files via the GitHub Trees API; supports branch/subdirectory paths and private repos via `GITHUB_TOKEN`
 
-- 📝 Generate professional documentation and docstrings
-- 🔍 Explain complex code step-by-step
-- ♻️ Refactor and optimize code
-- 📊 Create architecture diagrams
-- 🧠 Analyze code semantics and sentiment
+### 9-Panel Analysis Suite
+Each panel is an independent LLM call. Users select which panels to run before submitting — unselected panels are skipped (zero tokens spent).
 
-Perfect for developers, teams, and enterprises who want to accelerate documentation and knowledge transfer.
+| Panel | What It Produces |
+|-------|-----------------|
+| **Explanation** | Plain-language summary of what the code does |
+| **Architecture Diagram** | Raw Mermaid.js `graph TD` syntax |
+| **API Docs** | Markdown documentation for public functions, classes, endpoints |
+| **Refactor & Bugs** | Issue list + corrected code |
+| **Complexity** | Per-function Big-O table (Time + Space) with explanation |
+| **Optimise** | Before/after complexity tables + rewritten code |
+| **Compliance** | Checks code against a user-provided spec sheet (requires spec input) |
+| **Security Scan** | Vulnerability list + remediation recommendations |
+| **Next Actions** | Prioritised checklists for immediate work and tech debt |
+
+### SSE Streaming
+The `/api/analyze/stream` endpoint sends each panel result as a named SSE event the moment its LLM call finishes. The frontend renders panels progressively — no waiting for all 9 to complete.
+
+### Codebase Topology Graph
+The backend's AST parser extracts files, classes, functions, and imports into a graph of nodes and edges (with relationship types: `contains`, `calls`, `imports`). The frontend renders this as an interactive SVG canvas with pan, zoom, search, type filters, and a detail drawer showing signatures, docstrings, and parameters.
+
+### IntelliSense Code Viewer
+A side-by-side code viewer with line numbers that highlights symbols from the topology graph's symbol table. Hovering a known symbol shows its signature, file, line, and docstring in a tooltip. Clicking "Focus in Topology Graph" navigates the graph canvas to that node.
+
+### Dual AI Assistants
+- **💬 Ask Your Code** (bottom-right FAB) — multi-turn chat grounded in the analysed code context. Sends up to 8K chars of source as system context.
+- **🪄 Code Generator** (bottom-left FAB) — generates new REST endpoints, integration handlers, DB models, React hooks, or auth middleware tailored to the existing codebase. Includes preset prompt chips.
+
+### Authentication & History
+Firebase Auth (Google OAuth) gates access. Each completed analysis is saved to Cloud Firestore and can be reloaded from the History panel.
 
 ---
 
-## ✨ Features
+## 🏗️ Architecture
 
-### Core Capabilities
+```mermaid
+graph TD
+    subgraph "Frontend — React 19 + Vite 8"
+        UI[App.jsx — Router & State]
+        CIF[CodeInputForm — 4 input modes + panel selector]
+        RP[ResultsPanel — 9 output cards + export]
+        CGE[CodeGraphExplorer — SVG topology canvas]
+        ISV[IntelliSenseCodeViewer — symbol-aware code display]
+        CS[ChatSidebar — multi-turn Q&A bot]
+        CGB[CodeGeneratorBot — code synthesis bot]
+        HP[HistoryPanel — Firestore report browser]
+        LG[Login — Google OAuth]
+        FB[firebase.js — Auth + Firestore helpers]
+    end
 
-| Feature | Service | What It Does |
-|---------|---------|-------------|
-| **Auto-Documentation** | IBM Granite | Generates docstrings, README, API docs |
-| **Code Explanation** | IBM Bob | Step-by-step walkthroughs with visuals |
-| **Code Refactoring** | IBM Granite | Optimizes, fixes bugs, improves security |
-| **Architecture Diagrams** | IBM Bob | Auto-generates Mermaid diagrams |
-| **NLP Analysis** | IBM Watson | Sentiment analysis, entity extraction, keywords |
-| **Full Analysis** | All Three | Complete code intelligence report |
+    subgraph "Backend — FastAPI + Uvicorn"
+        MAIN["main.py — /api/analyze, /api/analyze/stream, /api/chat, /api/generate, /health"]
+        ORCH[orchestrator.py — asyncio.gather + Semaphore 2]
+        LLM["llm_client.py — 9 analysis fns + chat + generate via Groq API"]
+        AST["ast_parser.py — parse_python_ast + build_codebase_graph"]
+        IH["input_handler.py — paste / file / zip / GitHub ingestion"]
+    end
 
-### User Experience
+    subgraph "External Services"
+        GROQ[Groq Cloud — llama-3.3-70b-versatile]
+        GH[GitHub API — repo tree + raw files]
+        FBS[Firebase — Auth + Cloud Firestore]
+    end
 
-✅ **Simple UI** - Upload code or paste directly  
-✅ **Multiple Languages** - Python, JavaScript, Java, Go, C++  
-✅ **Real-time Results** - See documentation and refactored code instantly  
-✅ **Copy-Paste Ready** - All outputs ready to use in your project  
-✅ **Export Options** - Download as PDF, Markdown, or JSON  
+    UI --> CIF
+    UI --> RP
+    UI --> CS
+    UI --> CGB
+    UI --> HP
+    UI --> LG
+
+    CIF -- "POST multipart/form-data" --> MAIN
+    CS -- "POST JSON /api/chat" --> MAIN
+    CGB -- "POST JSON /api/generate" --> MAIN
+
+    MAIN --> IH
+    IH -- "GitHub URL" --> GH
+    MAIN --> AST
+    MAIN --> ORCH
+    ORCH -- "Semaphore(2)" --> LLM
+    LLM -- "httpx async" --> GROQ
+    MAIN -- "SSE EventSourceResponse" --> RP
+
+    RP --> CGE
+    RP --> ISV
+    UI --> FB
+    FB --> FBS
+```
 
 ---
 
 ## 🛠️ Tech Stack
 
-### Frontend
-- **React 18** - UI components
-- **TypeScript** - Type safety
-- **Tailwind CSS** - Styling
-- **Axios** - HTTP client
-- **React Syntax Highlighter** - Code display
-- **Mermaid** - Diagram rendering
-
-### Backend
-- **FastAPI** - Python web framework
-- **Uvicorn** - ASGI server
-- **Pydantic** - Data validation
-
-### AI Services
-- **IBM Granite** - LLM for code analysis
-- **IBM Bob** - Code explanation & architecture
-- **IBM Watson NLU** - Natural language processing
-
-### Database
-- **PostgreSQL** - Data persistence
-- **Prisma** - ORM
-
-### Deployment
-- **Vercel** - Frontend hosting
-- **IBM Cloud** - Backend & services
-- **Docker** - Containerization
+| Layer | Technology | Version | Source |
+|-------|-----------|---------|--------|
+| Runtime | Python | 3.11+ | — |
+| Backend framework | FastAPI | latest | `requirements.txt` |
+| ASGI server | Uvicorn (standard) | latest | `requirements.txt` |
+| HTTP client | httpx | latest | `requirements.txt` |
+| SSE | sse-starlette | latest | `requirements.txt` |
+| LLM SDK | groq | latest | `requirements.txt` |
+| Frontend framework | React | ^19.2.8 | `package.json` |
+| Frontend bundler | Vite | ^8.2.0 | `package.json` |
+| Auth & DB | Firebase | ^12.19.0 | `package.json` |
+| LLM provider | Groq Cloud (llama-3.3-70b-versatile) | — | `llm_client.py` |
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Getting Started
 
 ### Prerequisites
-- Node.js 16+
-- Python 3.8+
-- IBM Cloud account
-- PostgreSQL (local or cloud)
 
-### 5-Minute Setup
+- Python 3.11+
+- Node.js 18+ and npm
+- A [Groq API key](https://console.groq.com/keys) (free tier works)
+- *(Optional)* A GitHub personal access token for private repo imports
+- *(Optional)* A Firebase project for auth and history persistence
 
-```bash
-# 1. Clone repository
-git clone https://github.com/yourusername/ai-code-intelligence.git
-cd ai-code-intelligence
-
-# 2. Set up environment
-cp .env.example .env
-# Edit .env with your IBM Cloud credentials
-
-# 3. Install dependencies
-pip install -r requirements.txt
-cd frontend && npm install
-
-# 4. Run services
-# Terminal 1: Backend
-python backend/main.py
-
-# Terminal 2: Frontend
-cd frontend && npm start
-
-# 5. Open browser
-# http://localhost:3000
-```
-
----
-
-## 📦 Installation
-
-### Backend Setup
+### 1. Clone & Setup Backend
 
 ```bash
-# Create virtual environment
+git clone https://github.com/prajwalkv18/ai_code_intelligence.git
+cd ai_code_intelligence/ai_code_intelligence
+
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Windows: venv\Scripts\activate
+# macOS/Linux: source venv/bin/activate
 
-# Install packages
 pip install -r requirements.txt
-
-# Verify installation
-python -c "import ibm_watsonx_ai; print('✓ IBM Watsonx installed')"
+cp .env.example .env
 ```
 
-### Frontend Setup
+Start the backend:
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+### 2. Setup Frontend
 
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Verify React
-npm list react
+npm run dev
 ```
 
-### Database Setup
-
-```bash
-# Create PostgreSQL database
-createdb ai_code_intelligence
-
-# Run migrations (if using Prisma)
-npx prisma migrate dev
-```
-
----
-
-## ⚙️ Configuration
-
-### Environment Variables
-
-Create `.env` file in project root:
-
-```env
-# ========== IBM SERVICES ==========
-# Watsonx (Granite LLM)
-IBM_API_KEY=your_ibm_api_key_here
-IBM_PROJECT_ID=your_project_id_here
-WATSONX_URL=https://us-south.ml.cloud.ibm.com
-GRANITE_MODEL_ID=ibm/granite-13b-chat-v2
-
-# Watson NLU
-WATSON_NLU_API_KEY=your_nlu_api_key_here
-WATSON_NLU_URL=https://api.us-south.natural-language-understanding.watson.cloud.ibm.com/instances/your_instance_id
-WATSON_NLU_VERSION=2021-08-01
-
-# IBM Bob (Code Explanation)
-BOB_API_KEY=your_bob_api_key_here
-BOB_SERVICE_URL=https://code-explanation-service.ibm.com
-
-# ========== DATABASE ==========
-DATABASE_URL=postgresql://user:password@localhost:5432/ai_code_intelligence
-
-# ========== SERVER ==========
-BACKEND_PORT=8000
-FRONTEND_PORT=3000
-ENVIRONMENT=development
-```
-
-### Get IBM Credentials
-
-1. **Sign up** on [IBM Cloud](https://cloud.ibm.com)
-2. **Create Watsonx project** for IBM Granite
-3. **Create Watson NLU service**
-4. **Get API keys** from each service
-5. **Copy to .env**
-
----
-
-## 💻 Usage
-
-### Via Web Interface
-
-1. **Open** http://localhost:3000
-2. **Select** programming language (Python, JavaScript, etc.)
-3. **Paste or upload** your code
-4. **Click** "Analyze Code"
-5. **View** results:
-   - 📝 Documentation
-   - ♻️ Refactored code
-   - 📊 Architecture diagram
-   - 🔍 Analysis & keywords
-
-### Example Use Cases
-
-#### 1. Generate Documentation
-```python
-# Input: Your messy function
-def calc(x, y):
-    z = x + y
-    return z
-
-# Output: Professional docstring
-def calc(x: int, y: int) -> int:
-    """
-    Calculate the sum of two numbers.
-    
-    Args:
-        x (int): First number
-        y (int): Second number
-    
-    Returns:
-        int: Sum of x and y
-    
-    Example:
-        >>> calc(5, 3)
-        8
-    """
-    z = x + y
-    return z
-```
-
-#### 2. Explain Complex Code
-Input: Recursive algorithm → Output: Step-by-step breakdown
-
-#### 3. Refactor for Performance
-Input: N+1 query loop → Output: Optimized batch query with explanation
-
----
-
-## 📡 API Documentation
-
-### Base URL
-```
-http://localhost:8000
-```
-
-### Endpoints
-
-#### 1. Generate Documentation
-```bash
-POST /api/granite/document
-Content-Type: application/json
-
-{
-  "code": "def hello(name): return f'Hello {name}'",
-  "language": "python",
-  "file_name": "greeting.py"
-}
-
-Response:
-{
-  "status": "success",
-  "documentation": "def hello(name: str) -> str:\n    \"\"\"Generate greeting message...\"\"\""
-}
-```
-
-#### 2. Refactor Code
-```bash
-POST /api/granite/refactor
-Content-Type: application/json
-
-{
-  "code": "your code here",
-  "language": "javascript"
-}
-
-Response:
-{
-  "status": "success",
-  "refactored_code": "optimized code..."
-}
-```
-
-#### 3. Explain Code
-```bash
-POST /api/bob/explain
-Content-Type: application/json
-
-{
-  "code": "your code here",
-  "language": "python"
-}
-
-Response:
-{
-  "status": "success",
-  "explanation": [
-    "Step 1: Initialize variables",
-    "Step 2: Loop through array",
-    "Step 3: Return result"
-  ]
-}
-```
-
-#### 4. Generate Architecture
-```bash
-POST /api/bob/architecture
-Content-Type: application/json
-
-{
-  "code": "your code here",
-  "language": "java"
-}
-
-Response:
-{
-  "status": "success",
-  "diagram": "graph LR\n  A[Input] --> B[Processing]\n  B --> C[Output]"
-}
-```
-
-#### 5. Analyze with Watson
-```bash
-POST /api/watson/analyze
-Content-Type: application/json
-
-{
-  "code": "your code comments here"
-}
-
-Response:
-{
-  "status": "success",
-  "sentiment": {"score": 0.8, "label": "positive"},
-  "keywords": ["function", "optimization", "efficient"]
-}
-```
-
-#### 6. Full Analysis (All Services)
-```bash
-POST /api/analyze-full
-Content-Type: application/json
-
-{
-  "code": "your code here",
-  "language": "python"
-}
-
-Response:
-{
-  "status": "success",
-  "documentation": "...",
-  "refactored_code": "...",
-  "explanation": [...],
-  "architecture": "...",
-  "analysis": {...}
-}
-```
-
-#### 7. Health Check
-```bash
-GET /health
-
-Response:
-{
-  "status": "ok",
-  "services": ["granite", "bob", "watson"]
-}
-```
-
-### Error Responses
-
-```json
-{
-  "status": "error",
-  "message": "Failed to connect to Granite service",
-  "error_code": "SERVICE_UNAVAILABLE"
-}
-```
+The Vite dev server starts at `http://localhost:5173`.
 
 ---
 
 ## 📁 Project Structure
 
 ```
-ai-code-intelligence/
-├── backend/
-│   ├── services/
-│   │   ├── granite_service.py      # IBM Granite LLM
-│   │   ├── bob_service.py          # IBM Bob explanations
-│   │   ├── watson_service.py       # Watson NLU
-│   │   └── prompts.py              # Prompt templates
-│   ├── routes/
-│   │   ├── granite_routes.py
-│   │   ├── bob_routes.py
-│   │   └── watson_routes.py
-│   ├── config.py                   # Configuration
-│   ├── main.py                     # FastAPI app
-│   ├── requirements.txt
-│   └── test_services.py
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── CodeUpload.tsx
-│   │   │   ├── ResultsDisplay.tsx
-│   │   │   └── DiagramViewer.tsx
-│   │   ├── pages/
-│   │   │   ├── Home.tsx
-│   │   │   └── Analysis.tsx
-│   │   ├── App.tsx
-│   │   └── index.tsx
-│   ├── package.json
-│   └── tsconfig.json
-├── .env.example                    # Environment template
-├── .gitignore
-├── README.md
-└── docker-compose.yml              # Docker setup
+ai_code_intelligence/
+├── README.md                # Root project README
+└── ai_code_intelligence/    # Main application root
+    ├── main.py              # FastAPI app — all endpoints defined here
+    ├── orchestrator.py      # Concurrent LLM dispatch with asyncio.Semaphore(2)
+    ├── llm_client.py        # Groq API wrappers for 9 panels + chat + generate
+    ├── ast_parser.py        # Python AST parsing + multi-language topology graph builder
+    ├── input_handler.py     # Code extraction: paste, file, zip, GitHub URL
+    ├── requirements.txt     # Python dependencies
+    ├── .env.example         # Template for environment variables
+    └── frontend/
+        ├── src/
+        │   ├── App.jsx                  # Root layout & routing
+        │   ├── CodeInputForm.jsx        # 4-mode input + panel selector
+        │   ├── ResultsPanel.jsx         # 9 panel output grid & exports
+        │   ├── CodeGraphExplorer.jsx    # Interactive SVG topology graph
+        │   ├── IntelliSenseCodeViewer.jsx # Symbol hover & line viewer
+        │   ├── ChatSidebar.jsx          # "Ask Your Code" AI chat
+        │   └── CodeGeneratorBot.jsx     # Code generator bot
+        ├── package.json
+        └── vite.config.js
 ```
 
 ---
 
-## 🔨 Development
+## 📝 License
 
-### Running Tests
-
-```bash
-# Backend tests
-cd backend
-pytest test_services.py -v
-
-# Frontend tests
-cd frontend
-npm test
-```
-
-### Code Quality
-
-```bash
-# Linting (Backend)
-pylint backend/
-
-# Formatting (Backend)
-black backend/
-
-# Linting (Frontend)
-cd frontend
-npm run lint
-
-# Format (Frontend)
-npm run format
-```
-
-### Adding New Features
-
-1. **Create service** (e.g., `new_service.py`)
-2. **Add API route** (e.g., `/api/new-endpoint`)
-3. **Create React component** for UI
-4. **Test locally** before pushing
-5. **Update documentation**
+This project is licensed under the MIT License.
 
 ---
 
-## 🌐 Deployment
+## 👤 Author
 
-### Deploy Backend to IBM Cloud
-
-```bash
-# Install IBM Cloud CLI
-curl -fsSL https://clis.cloud.ibm.com/install/linux | bash
-
-# Login
-ibmcloud login -u your_email@example.com
-
-# Deploy
-ibmcloud cf push ai-code-intelligence-backend
-
-# View logs
-ibmcloud cf logs ai-code-intelligence-backend --recent
-```
-
-### Deploy Frontend to Vercel
-
-```bash
-# Install Vercel CLI
-npm i -g vercel
-
-# Deploy
-vercel
-
-# Set environment variables in Vercel dashboard
-# REACT_APP_API_URL=https://backend-url.ibm.cloud
-```
-
-### Docker Deployment
-
-```bash
-# Build images
-docker-compose build
-
-# Run services
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-```
-
----
-
-## 🐛 Troubleshooting
-
-### Issue: 401 Unauthorized
-
-**Solution:** Check `.env` file - IBM API keys may be expired or incorrect
-```bash
-# Regenerate keys from IBM Cloud Dashboard
-# Update .env file
-```
-
-### Issue: Connection Refused
-
-**Solution:** Ensure backend is running
-```bash
-# Terminal 1
-python backend/main.py
-
-# Should show: "Uvicorn running on http://0.0.0.0:8000"
-```
-
-### Issue: CORS Error in Frontend
-
-**Solution:** Update CORS settings in `backend/main.py`
-```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://yourdomain.com"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
-
-### Issue: Watson API Timeout
-
-**Solution:** Increase timeout in `watson_service.py`
-```python
-response = requests.post(..., timeout=60)  # Increase from 30
-```
-
-### Issue: Module Not Found
-
-**Solution:** Install dependencies
-```bash
-# Backend
-pip install -r requirements.txt
-
-# Frontend
-cd frontend && npm install
-```
-
-### Issue: Database Connection Error
-
-**Solution:** Verify DATABASE_URL in `.env`
-```bash
-# Test connection
-psql $DATABASE_URL -c "SELECT 1"
-```
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Follow these steps:
-
-### 1. Fork Repository
-```bash
-git clone https://github.com/yourusername/ai-code-intelligence.git
-cd ai-code-intelligence
-```
-
-### 2. Create Feature Branch
-```bash
-git checkout -b feature/your-feature-name
-```
-
-### 3. Make Changes
-- Follow code style (PEP 8 for Python, Prettier for JavaScript)
-- Add tests for new features
-- Update documentation
-
-### 4. Commit & Push
-```bash
-git add .
-git commit -m "feat: add support for Rust code analysis"
-git push origin feature/your-feature-name
-```
-
-### 5. Create Pull Request
-- Describe changes clearly
-- Link related issues
-- Request review
-
----
-
-## 📝 Commit Convention
-
-Follow [Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-feat: add Rust language support
-fix: resolve Watson timeout issue
-docs: update API documentation
-style: format code
-test: add unit tests for refactor
-chore: update dependencies
-```
-
----
-
-## 🚦 Roadmap
-
-- [ ] GitHub integration (auto-analyze repos)
-- [ ] PostgreSQL integration for history
-- [ ] User authentication & teams
-- [ ] IDE plugins (VS Code, JetBrains)
-- [ ] Mobile app (React Native)
-- [ ] Real-time collaboration
-- [ ] Advanced caching strategy
-- [ ] Custom LLM fine-tuning
-- [ ] Multi-language support expansion
-- [ ] Performance benchmarking
-
----
-
-## 📧 Contact & Support
-
-- **Issues:** [GitHub Issues](https://github.com/yourusername/ai-code-intelligence/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/yourusername/ai-code-intelligence/discussions)
-- **Email:** 
-- **Discord:** [Join our community](https://discord.gg/yourserver)
-
----
-
-## 🙏 Acknowledgments
-
-- IBM Watsonx team for Granite LLM
-- IBM Bob for code explanation service
-- IBM Watson for NLP capabilities
-- FastAPI & React communities
-- Our amazing contributors ✨
-
----
-
-## ⭐ Show Your Support
-
-If this project helps you, please consider:
-- ⭐ Star the repository
-- 🐛 Report bugs
-- 💡 Suggest features
-- 🤝 Contribute code
-
----
-
-**Made with ❤️ by the AI Code Intelligence Team**
-
-[⬆ Back to Top](#-ai-code-intelligence-platform)
+**Prajwal K V**
+- GitHub: [@prajwalkv18](https://github.com/prajwalkv18)
+- LinkedIn: [prajwalkv18](https://linkedin.com/in/prajwalkv18)
